@@ -1,0 +1,49 @@
+public List<String> validateAndAlert(Dataset<Row> fundReference, String correlationGroup,
+                                         Map<ApplicationArgument, String> runParams) {
+        List<Row> invalidRows = computeInvalidLeadFunds(fundReference, correlationGroup).collectAsList();
+        if (!invalidRows.isEmpty()) {
+            sendAlert(buildAlertMessage(invalidRows), runParams);
+        }
+        return invalidRows.stream()
+                .map(row -> (String) row.getAs("FUND_ID"))
+                .collect(Collectors.toList());
+    }
+
+    static Dataset<Row> computeInvalidLeadFunds(Dataset<Row> fundReference, String correlationGroup) {
+        return fundReference
+                .filter(upper(col("CORRELATION_GROUP")).equalTo(upper(lit(correlationGroup))))
+                .groupBy("FUND_ID")
+                .agg(
+                        sum(when(col("MODEL_PROCESSING_INDICATOR").equalTo(lit(VALID_LEAD_INDICATOR)), lit(1)).otherwise(lit(0))).as("LEAD_COUNT"),
+                        concat_ws(",", collect_list(when(col("MODEL_PROCESSING_INDICATOR").equalTo(lit(VALID_LEAD_INDICATOR)), col("SHARE_CLASS")))).as("LEAD_SHARE_CLASSES"),
+                        first("MEMBER_SHORT_NAME").as("MEMBER_SHORT_NAME"),
+                        first("CORRELATION_GROUP").as("CORRELATION_GROUP"),
+                        first("FUND_GROUP").as("FUND_GROUP"))
+                .filter(col("LEAD_COUNT").notEqual(lit(1)));
+    }
+
+    static String buildAlertMessage(List<Row> invalidRows) {
+        return invalidRows.stream()
+                .map(row -> String.format(
+                        "Fund [%s] member=%s correlationGroup=%s fundGroup=%s shareClasses=[%s] leadCount=%d",
+                        row.getAs("FUND_ID"),
+                        row.getAs("MEMBER_SHORT_NAME"),
+                        row.getAs("CORRELATION_GROUP"),
+                        row.getAs("FUND_GROUP"),
+                        row.getAs("LEAD_SHARE_CLASSES"),
+                        row.<Long>getAs("LEAD_COUNT")))
+                .collect(Collectors.joining("\n"));
+    }
+
+    private void sendAlert(String message, Map<ApplicationArgument, String> runParams) {
+        try {
+            splunkAlertService.sendAlert(
+                    SplunkAlertService.createBaseSplunkAlert(runParams)
+                            .alertCode(ALERT_CODE)
+                            .alertMessage(message)
+                            .build());
+        } catch (Exception e) {
+            log.error("Failed to send lead share class Splunk alert", e);
+        }
+    }
+}
