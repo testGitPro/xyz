@@ -1,0 +1,57 @@
+
+import org.apache.spark.sql.Dataset;
+import org.apache.spark.sql.Row;
+import org.apache.spark.sql.SparkSession;
+
+import static org.apache.spark.sql.functions.*;
+
+public class SparkQueryExample {
+
+    public static void main(String[] args) {
+
+        SparkSession spark = SparkSession.builder()
+                .appName("Spark Query Example")
+                .master("local[*]")
+                .getOrCreate();
+
+        // 1. Read table
+        Dataset<Row> claims = spark.table("default.claims");
+
+        // 2. Query using SQL
+        Dataset<Row> result = spark.sql("""
+            SELECT
+                claim_id,
+                status,
+                amount
+            FROM default.claims
+            WHERE status = 'OPEN'
+              AND amount > 1000
+            ORDER BY amount DESC
+            LIMIT 100
+            """);
+
+        result.show(false);
+
+        // 3. Query using DataFrame API
+        Dataset<Row> filtered = claims
+                .filter(col("status").equalTo("OPEN"))
+                .filter(col("amount").gt(1000))
+                .select("claim_id", "status", "amount")
+                .orderBy(col("amount").desc())
+                .limit(100);
+
+        filtered.show(false);
+
+        // 4. Aggregation
+        Dataset<Row> aggregated = claims
+                .groupBy("status")
+                .agg(
+                    count("*").alias("total_claims"),
+                    sum("amount").alias("total_amount")
+                );
+
+        aggregated.show(false);
+
+        spark.stop();
+    }
+
