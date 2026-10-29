@@ -1,0 +1,68 @@
+
+import org.apache.spark.sql.Dataset;
+import org.apache.spark.sql.Row;
+import org.apache.spark.sql.SparkSession;
+
+import static org.apache.spark.sql.functions.*;
+
+public class SparkQueryExample {
+
+    public static void main(String[] args) {
+
+        SparkSession spark = SparkSession.builder()
+                .appName("Spark Query Example")
+                .master("local[*]")
+                .getOrCreate();
+
+        // 1. Read table
+        Dataset<Row> claims = spark.table("default.claims");
+
+        // 2. Query using SQL
+        Dataset<Row> result = spark.sql("""
+            SELECT
+                claim_id,
+                status,
+                amount
+            FROM default.claims
+            WHERE status = 'OPEN'
+              AND amount > 1000
+            ORDER BY amount DESC
+            LIMIT 100
+            """);
+
+        result.show(false);
+
+        // 3. Query using DataFrame API
+        Dataset<Row> filtered = claims
+                .filter(col("status").equalTo("OPEN"))
+                .filter(col("amount").gt(1000))
+                .select("claim_id", "status", "amount")
+                .orderBy(col("amount").desc())
+                .limit(100);
+
+        filtered.show(false);
+
+        // 4. Aggregation
+        Dataset<Row> aggregated = claims
+                .groupBy("status")
+                .agg(
+                    count("*").alias("total_claims"),
+                    sum("amount").alias("total_amount")
+                );
+
+        aggregated.show(false);
+
+        spark.stop();
+    }
+}
+
+
+- Two NAV daily files/legs arrived for MTBJ on 11/11 — Leg 1: MTBJ_NAV_BBH_IDS_Q.NAV_DLY.20261111.csv and Leg 2: INF_MTB_NAV_IDS_Q.NAV_DLY.20261111.csv.
+  - Both legs processed the same batch (24296) — anomaly detection ran twice for it (JOB_EXEC_ID 128243 at 04:44 and 128247 at 08:54), producing two result emails instead of one.
+  - The completeness check returns a single row, so this is not a per-correlation-group duplication — it's the same batch being processed twice because two file events arrived.
+
+  Question — this decides where the fix goes:
+  1. In production, is MTBJ expected to receive two NAV files (BBH + INF legs) for the same accounting date, or should only one arrive?
+    - If only one is expected → the duplicate leg is an upstream/gateway issue (not the anomaly code).
+    - If both legs are valid → the anomaly flow should be made idempotent per batch (skip anomaly/email if the batch was already processed), so it sends one email per batch/accounting date.
+  2. Should the results email fire once per accounting date, regardless of how many NAV files are received?
